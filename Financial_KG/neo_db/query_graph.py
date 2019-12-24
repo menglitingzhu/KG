@@ -1,3 +1,9 @@
+import math
+
+import numpy as np
+from py2neo import Record
+
+from app import get_profile
 from neo_db.config import graph, CA_LIST, similar_words
 import codecs
 import os
@@ -124,4 +130,115 @@ def get_KGQA_answer2(array):
 
     return get_json_data(data_array)
 
+def Neo4j_Search_Entity(self, Str,SearchObj):  # Fuzzy Search,search entities, SearchObj could be "PubCompany" or"NonPubCompany" or "Person" or ""
+    if len(SearchObj) == 0:
+        cypher = "match (n) where n.CompanyName =~'.*" + Str + ".*' or n.Shortname =~'.*" + Str + \
+            ".*' or n.Stock_Code =~'.*" + Str + ".*' or n.PersonName =~'.*" + Str + ".*' Return n"
+    else:
+        cypher = "match (n:" + SearchObj + ") where n.CompanyName =~'.*" + Str + ".*' or n.Shortname =~'.*" \
+            + Str + ".*' or n.Stock_Code =~'.*" + Str + ".*' or n.PersonName =~'.*" + Str + ".*' Return n"
 
+        with self._driver.session() as session:
+            with session.begin_transaction() as tx:
+                data = []
+                for record in tx.run(cypher).records():
+                    data.append(record)
+    return data
+
+def Neo4j_SearchByRe(self, ModelN, direction, *list):
+        # args means a list of 5 elements which have been known for searching
+        # direction = 0 or 1, 0 means forward relation, 1 means backward relation
+        # ModelN from 0 to 2, represents which element of tenary relation is absence
+        # for example: Neo4j_SearchByRe(2,1, [":Person{PersonName:'王石'}", ":Manage|:Holder"]) means search entities
+        #  N which meet the relation (王石) manages N or has share of, refers to (:Person{PersonName:'王石'}) <-[:Manage|:Horlder]- (which entities)
+    args = list[0]
+    if len(args) != 2:
+        print("the number of parameters is error\n")
+        return None
+    if ModelN > 2 or ModelN < 0:
+        print("Wrong ModelN number\n")
+        return None
+    if direction > 1 or direction < 0:
+        print("Wrong direction number\n")
+
+    if ModelN == 0:
+        if direction == 0:
+             cypher = "match(result)-[" + args[0] + "]->(" + args[1] + ") return result"
+        else:
+            cypher = "match(result)<-[" + args[0] + "]-(" + args[1] + ") return result"
+    elif ModelN == 1:
+        if direction == 0:
+            cypher = "match(" + args[0] + ")-[result]->(" + args[1] + ") return result"
+        else:
+            cypher = "match(" + args[0] + ")<-[result]-(" + args[1] + ") return result"
+    else:
+        if direction == 0:
+            cypher = "match(" + args[0] + ")-[" + args[1] + "]->(result) return result"
+        else:
+            cypher = "match(" + args[0] + ")<-[" + args[1] + "]-(result) return result"
+    with self._driver.session() as session:
+        with session.begin_transaction() as tx:
+            data = []
+            for record in tx.run(cypher).records():
+                # print(type(tx.run(cypher).records()))
+                print(type(record[0]._properties))
+                data.append(record)
+    return data
+
+def Neo4j_SearchByOneEntity(self, ModelN, direction, SearchObj):
+        # Meaning of direction is same as that of Neo4j_SearchByRe
+        # ModelN is 0 or 1, 0 refers to function will return set of entities, 1 refers set of relations
+        # SearchObj is a string similar with *list of Neo4j_SearchByRe
+        if ModelN == 0:
+            if direction == 0:
+                cypher = "MATCH (" + SearchObj + ")-->(result) return result"
+            else:
+                cypher = "MATCH (result)-->(" + SearchObj + ") return result"
+        else:
+            if direction == 0:
+                cypher = "MATCH (" + SearchObj + ")-[r]->(result) return r"
+            else:
+                cypher = "MATCH (result)-[r]->(" + SearchObj + ") return r"
+        with self._driver.session() as session:
+            with session.begin_transaction() as tx:
+                data = []
+                for record in tx.run(cypher).records():
+                    # print(type(tx.run(cypher).records()))
+                    print(type(record[0]._properties))
+                    data.append(record)
+        return data
+
+def SortByLD(self, str, args):  # designed for sorting entities
+    if type(args[0]) != Record:
+            print("Only could sort the class of neo4j.Records")
+            return None
+    LDtemp = []
+    for record in args:
+        Tmp = []
+        for pros in record[0]._properties.keys():
+            Tmp.append(self.auto_distance(str, record[0]._properties[pros]))
+        LDtemp.append(sum(Tmp))
+    NewRank = []
+    RankScore = []
+    for i in args:
+        Site = LDtemp.index(max(LDtemp))
+        RankScore.append(LDtemp[Site])
+        LDtemp[Site] = -1
+        NewRank.append(args[Site])
+    return NewRank, RankScore
+
+def auto_distance(Exa_str1, Exa_str2):  # LD
+    global result
+    n1 = len(Exa_str1)
+    n2 = len(Exa_str2)
+    Exa_M = np.zeros((n1 + 1, n2 + 1))
+    for i in range(n1 + 1):
+        Exa_M[i][0] = i
+    for j in range(n2 + 1):
+            Exa_M[0][j] = j
+    for i in range(1, n1 + 1):
+        for j in range(1, n2 + 1):
+            Exa_M[i][j] = min(Exa_M[i - 1][j - 1] + (1 - (Exa_str1[i - 1] == Exa_str2[j - 1])), Exa_M[i][j - 1] + 1,
+                                Exa_M[i - 1][j] + 1)
+            result = 1 - 1 / (1 + math.log(Exa_M[i][j] + 1, math.e))
+    return result
